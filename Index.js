@@ -32,10 +32,31 @@ async function run() {
     );
 
     const estateCollection = client.db("estateDB").collection("estate");
+    const userCollection = client.db("estateDB").collection("users");
 
     app.get("/estates", async (req, res) => {
       try {
         const result = await estateCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to retrieve estates" });
+      }
+    });
+
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const query = { email: user.email };
+      const existingUser = await userCollection.findOne(query);
+      if (existingUser) {
+        return res.send({ message: "user already exist", insertedId: null });
+      }
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+
+    app.get("/users", async (req, res) => {
+      try {
+        const result = await userCollection.find().toArray();
         res.send(result);
       } catch (error) {
         res.status(500).send({ error: "Failed to retrieve estates" });
