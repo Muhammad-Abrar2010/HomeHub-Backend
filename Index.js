@@ -55,7 +55,7 @@ async function run() {
         agent_email,
         verification_status,
         price_range,
-        agent_image
+        agent_image,
       } = req.body;
 
       try {
@@ -72,12 +72,10 @@ async function run() {
         };
 
         const result = await estateCollection.insertOne(newProperty);
-        res
-          .status(201)
-          .json({
-            message: "Property added successfully",
-            propertyId: result.insertedId,
-          });
+        res.status(201).json({
+          message: "Property added successfully",
+          propertyId: result.insertedId,
+        });
       } catch (error) {
         console.error("Failed to add property:", error);
         res.status(500).json({ error: "Failed to add property" });
@@ -132,14 +130,16 @@ async function run() {
 
     app.delete("/deleteProperty/:id", async (req, res) => {
       const propertyId = req.params.id;
-    
+
       try {
-        const result = await estateCollection.deleteOne({ _id: new ObjectId(propertyId) });
-    
+        const result = await estateCollection.deleteOne({
+          _id: new ObjectId(propertyId),
+        });
+
         if (result.deletedCount === 0) {
           return res.status(404).json({ message: "Property not found" });
         }
-    
+
         res.status(200).json({ message: "Property deleted successfully" });
       } catch (error) {
         console.error("Failed to delete property:", error);
@@ -150,7 +150,9 @@ async function run() {
     app.get("/properties", async (req, res) => {
       const { agentEmail } = req.query;
       try {
-        const properties = await estateCollection.find({ agent_email: agentEmail }).toArray();
+        const properties = await estateCollection
+          .find({ agent_email: agentEmail })
+          .toArray();
         res.status(200).json(properties);
       } catch (error) {
         console.error("Failed to fetch properties:", error);
@@ -179,61 +181,6 @@ async function run() {
       }
     });
 
-    app.post("/wishlist", async (req, res) => {
-      const { email, estateId } = req.body;
-      try {
-        const existingWishlist = await wishlistCollection.findOne({
-          email,
-          estateId,
-        });
-        if (existingWishlist) {
-          return res
-            .status(400)
-            .json({ message: "Property already in wishlist" });
-        }
-        await wishlistCollection.insertOne({ email, estateId });
-        res.status(201).json({ message: "Property added to wishlist" });
-      } catch (error) {
-        console.error("Failed to add property to wishlist:", error);
-        res.status(500).json({ error: "Failed to add property to wishlist" });
-      }
-    });
-
-    app.get("/wishlist/:email", async (req, res) => {
-      const userEmail = req.params.email;
-      try {
-        const wishlistItems = await wishlistCollection
-          .find({ email: userEmail })
-          .toArray();
-        res.status(200).json(wishlistItems);
-      } catch (error) {
-        console.error("Failed to fetch wishlist:", error);
-        res.status(500).json({ error: "Failed to fetch wishlist" });
-      }
-    });
-
-    app.delete("/wishlist/:estateId", async (req, res) => {
-      const { email } = req.query;
-      const estateId = req.params.estateId;
-      try {
-        const deleteResult = await wishlistCollection.deleteOne({
-          email,
-          estateId,
-        });
-        if (deleteResult.deletedCount === 0) {
-          return res
-            .status(404)
-            .json({ message: "Property not found in wishlist" }); // Send 404 for not found
-        }
-        res.status(200).json({ message: "Property removed from wishlist" });
-      } catch (error) {
-        console.error("Failed to remove property from wishlist:", error);
-        res
-          .status(500)
-          .json({ error: "Failed to remove property from wishlist" });
-      }
-    });
-
     app.post("/offers", async (req, res) => {
       const {
         estateId,
@@ -255,15 +202,8 @@ async function run() {
           return res.status(404).json({ message: "Property not found" });
         }
 
-        const priceRange = estate.price_range.split("-");
-        const minPrice = parseFloat(priceRange[0].trim());
-        const maxPrice = parseFloat(priceRange[1].trim());
-
-        if (offered_amount < minPrice || offered_amount > maxPrice) {
-          return res.status(400).json({
-            message: "Offered amount must be within the specified price range",
-          });
-        }
+        const priceRange = estate.price_range;
+ 
 
         await offerCollection.insertOne({
           estateId,
@@ -314,6 +254,42 @@ async function run() {
       } catch (error) {
         console.error("Failed to fetch offers:", error);
         res.status(500).json({ error: "Failed to fetch offers" });
+      }
+    });
+
+    app.patch("/offers/:id/status", async (req, res) => {
+      const offerId = req.params.id;
+      const { status } = req.body;
+
+      try {
+        const offer = await offerCollection.findOne({
+          _id: new ObjectId(offerId),
+        });
+        if (!offer) {
+          return res.status(404).json({ message: "Offer not found" });
+        }
+
+        if (status === "accepted") {
+          await offerCollection.updateOne(
+            { _id: new ObjectId(offerId) },
+            { $set: { status: "accepted" } }
+          );
+
+          await offerCollection.updateMany(
+            { estateId: offer.estateId, _id: { $ne: new ObjectId(offerId) } },
+            { $set: { status: "rejected" } }
+          );
+        } else if (status === "rejected") {
+          await offerCollection.updateOne(
+            { _id: new ObjectId(offerId) },
+            { $set: { status: "rejected" } }
+          );
+        }
+
+        res.status(200).json({ message: "Offer status updated" });
+      } catch (error) {
+        console.error("Failed to update offer status:", error);
+        res.status(500).json({ error: "Failed to update offer status" });
       }
     });
 
@@ -377,6 +353,63 @@ async function run() {
       } catch (error) {
         console.error("Failed to delete review:", error);
         res.status(500).json({ error: "Failed to delete review" });
+      }
+    });
+
+
+   
+    app.post("/wishlist", async (req, res) => {
+      const { email, estateId } = req.body;
+      try {
+        const existingWishlist = await wishlistCollection.findOne({
+          email,
+          estateId,
+        });
+        if (existingWishlist) {
+          return res
+            .status(400)
+            .json({ message: "Property already in wishlist" });
+        }
+        await wishlistCollection.insertOne({ email, estateId });
+        res.status(201).json({ message: "Property added to wishlist" });
+      } catch (error) {
+        console.error("Failed to add property to wishlist:", error);
+        res.status(500).json({ error: "Failed to add property to wishlist" });
+      }
+    });
+
+    app.get("/wishlist/:email", async (req, res) => {
+      const userEmail = req.params.email;
+      try {
+        const wishlistItems = await wishlistCollection
+          .find({ email: userEmail })
+          .toArray();
+        res.status(200).json(wishlistItems);
+      } catch (error) {
+        console.error("Failed to fetch wishlist:", error);
+        res.status(500).json({ error: "Failed to fetch wishlist" });
+      }
+    });
+
+    app.delete("/wishlist/:estateId", async (req, res) => {
+      const { email } = req.query;
+      const estateId = req.params.estateId;
+      try {
+        const deleteResult = await wishlistCollection.deleteOne({
+          email,
+          estateId,
+        });
+        if (deleteResult.deletedCount === 0) {
+          return res
+            .status(404)
+            .json({ message: "Property not found in wishlist" }); // Send 404 for not found
+        }
+        res.status(200).json({ message: "Property removed from wishlist" });
+      } catch (error) {
+        console.error("Failed to remove property from wishlist:", error);
+        res
+          .status(500)
+          .json({ error: "Failed to remove property from wishlist" });
       }
     });
   } catch (error) {
