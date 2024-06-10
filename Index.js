@@ -3,6 +3,9 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const app = express();
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
 const port = process.env.PORT || 5000;
 
 app.use(express.json());
@@ -37,6 +40,24 @@ async function run() {
     const offerCollection = client.db("estateDB").collection("offers");
     const reviewsCollection = client.db("estateDB").collection("reviews");
 
+    app.post("/create-payment-intent", async (req, res) => {
+      const { amount, email } = req.body;
+
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: "usd",
+          receipt_email: email,
+        });
+
+        res.send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
+
     app.get("/estates", async (req, res) => {
       try {
         const result = await estateCollection.find().toArray();
@@ -53,7 +74,6 @@ async function run() {
         property_image,
         agent_name,
         agent_email,
-        verification_status,
         price_range,
         agent_image,
       } = req.body;
@@ -65,7 +85,7 @@ async function run() {
           property_image,
           agent_name,
           agent_email,
-          verification_status,
+          verification_status: "pending",
           price_range,
           agent_image,
           createdAt: new Date(),
@@ -79,6 +99,46 @@ async function run() {
       } catch (error) {
         console.error("Failed to add property:", error);
         res.status(500).json({ error: "Failed to add property" });
+      }
+    });
+
+    app.patch("/rejectProperty/:id", async (req, res) => {
+      const propertyId = req.params.id;
+
+      try {
+        const result = await estateCollection.updateOne(
+          { _id: new ObjectId(propertyId) },
+          { $set: { verification_status: "rejected" } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Property not found" });
+        }
+
+        res.status(200).json({ message: "Property rejected successfully" });
+      } catch (error) {
+        console.error("Failed to reject property:", error);
+        res.status(500).json({ error: "Failed to reject property" });
+      }
+    });
+
+    app.patch("/verifyProperty/:id", async (req, res) => {
+      const propertyId = req.params.id;
+
+      try {
+        const result = await estateCollection.updateOne(
+          { _id: new ObjectId(propertyId) },
+          { $set: { verification_status: "verified" } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Property not found" });
+        }
+
+        res.status(200).json({ message: "Property verified successfully" });
+      } catch (error) {
+        console.error("Failed to verify property:", error);
+        res.status(500).json({ error: "Failed to verify property" });
       }
     });
 
@@ -128,6 +188,42 @@ async function run() {
       }
     });
 
+    app.put("/update-offer-status/:estateId", async (req, res) => {
+      const estateId = req.params.estateId;
+      const { status, transactionId } = req.body;
+
+      try {
+        // Update the status of the offer
+        const result = await offerCollection.updateOne(
+          { estateId: new ObjectId(estateId), status: "accepted" }, // Find the accepted offer for the given estateId
+          { $set: { status, transactionId } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Offer not found" });
+        }
+
+        // Update the property status to 'bought'
+        const propertyResult = await estateCollection.updateOne(
+          { _id: new ObjectId(estateId) },
+          { $set: { status: "bought" } }
+        );
+
+        if (propertyResult.matchedCount === 0) {
+          return res.status(404).json({ message: "Property not found" });
+        }
+
+        res
+          .status(200)
+          .json({ message: "Offer and property status updated successfully" });
+      } catch (error) {
+        console.error("Failed to update offer and property status:", error);
+        res
+          .status(500)
+          .json({ error: "Failed to update offer and property status" });
+      }
+    });
+
     app.delete("/deleteProperty/:id", async (req, res) => {
       const propertyId = req.params.id;
 
@@ -171,13 +267,82 @@ async function run() {
       res.send(result);
     });
 
+    // Fetch all users
     app.get("/users", async (req, res) => {
       try {
-        const result = await userCollection.find().toArray();
+        const users = await client
+          .db("estateDB")
+          .collection("users")
+          .find()
+          .toArray();
+        res.send(users);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to retrieve users" });
+      }
+    });
+
+    // Make a user admin
+    app.post("/users/:id/make-admin", async (req, res) => {
+      try {
+        const userId = req.params.id;
+        const result = await client
+          .db("estateDB")
+          .collection("users")
+          .updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { role: "admin" } }
+          );
         res.send(result);
       } catch (error) {
-        console.error("Failed to retrieve users:", error);
-        res.status(500).send({ error: "Failed to retrieve users" });
+        res.status(500).send({ error: "Failed to make user admin" });
+      }
+    });
+
+    // Make a user agent
+    app.post("/users/:id/make-agent", async (req, res) => {
+      try {
+        const userId = req.params.id;
+        const result = await client
+          .db("estateDB")
+          .collection("users")
+          .updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { role: "agent" } }
+          );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to make user agent" });
+      }
+    });
+
+    // Mark as fraud
+    app.post("/users/:id/mark-fraud", async (req, res) => {
+      try {
+        const userId = req.params.id;
+        const result = await client
+          .db("estateDB")
+          .collection("users")
+          .updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { isFraud: true } }
+          );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to mark user as fraud" });
+      }
+    });
+
+    // Delete user
+    app.delete("/users/:id", async (req, res) => {
+      try {
+        const userId = req.params.id;
+        const result = await client
+          .db("estateDB")
+          .collection("users")
+          .deleteOne({ _id: new ObjectId(userId) });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to delete user" });
       }
     });
 
@@ -203,7 +368,6 @@ async function run() {
         }
 
         const priceRange = estate.price_range;
- 
 
         await offerCollection.insertOne({
           estateId,
@@ -317,16 +481,28 @@ async function run() {
       }
     });
 
+    // app.get("/reviews", async (req, res) => {
+    //   try {
+    //     const { estateId } = req.query;
+
+    //     const result = await reviewsCollection.find({ estateId }).toArray();
+    //     res.send(result);
+    //   } catch (error) {
+    //     res.status(500).send({ error: "Failed to retrieve comments" });
+    //   }
+    // });
+
     app.get("/reviews", async (req, res) => {
       try {
-        const { estateId } = req.query;
-        const result = await reviewsCollection.find({ estateId }).toArray();
+        console.log("Fetching reviews..."); // Add this line
+        const result = await reviewsCollection.find().toArray();
+        console.log("Reviews fetched:", result); // Add this line
         res.send(result);
       } catch (error) {
-        res.status(500).send({ error: "Failed to retrieve comments" });
+        console.error("Failed to retrieve reviews:", error);
+        res.status(500).send({ error: "Failed to retrieve reviews" });
       }
     });
-
     app.get("/reviews/user/:email", async (req, res) => {
       const userEmail = req.params.email;
       try {
@@ -356,8 +532,32 @@ async function run() {
       }
     });
 
+    app.get("/reviews", async (req, res) => {
+      try {
+        const result = await reviewsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to retrieve comments" });
+      }
+    });
 
-   
+    // Delete a review by ID
+    app.delete("/reviews/:reviewId", async (req, res) => {
+      const reviewId = req.params.reviewId;
+      try {
+        const deleteResult = await reviewsCollection.deleteOne({
+          _id: new ObjectId(reviewId),
+        });
+        if (deleteResult.deletedCount === 0) {
+          return res.status(404).json({ message: "Review not found" });
+        }
+        res.status(200).json({ message: "Review deleted successfully" });
+      } catch (error) {
+        console.error("Failed to delete review:", error);
+        res.status(500).json({ error: "Failed to delete review" });
+      }
+    });
+
     app.post("/wishlist", async (req, res) => {
       const { email, estateId } = req.body;
       try {
