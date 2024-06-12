@@ -102,6 +102,42 @@ async function run() {
       }
     });
 
+    app.put("/update-offer-status/:estateId/:offerId", async (req, res) => {
+      const { estateId, offerId } = req.params;
+      const { status } = req.body;
+
+      try {
+        // Check if the offer exists
+        const offer = await offerCollection.findOne({
+          _id: new ObjectId(offerId),
+          estateId: estateId,
+        });
+        if (!offer) {
+          return res.status(404).json({ message: "Offer not found" });
+        }
+
+        // Update the status of the offer
+        await offerCollection.updateOne(
+          { _id: new ObjectId(offerId) },
+          { $set: { status: "bought" } }
+        );
+
+        // Optionally, you can update other offers associated with the same estate
+        // For example, mark all other offers as "rejected" if this one is "accepted"
+        if (status === "accepted") {
+          await offerCollection.updateMany(
+            { estateId: estateId, _id: { $ne: new ObjectId(offerId) } },
+            { $set: { status: "rejected" } }
+          );
+        }
+
+        res.status(200).json({ message: "Offer status updated successfully" });
+      } catch (error) {
+        console.error("Failed to update offer status:", error);
+        res.status(500).json({ error: "Failed to update offer status" });
+      }
+    });
+
     app.patch("/rejectProperty/:id", async (req, res) => {
       const propertyId = req.params.id;
 
@@ -159,6 +195,7 @@ async function run() {
     });
 
     app.put("/updateProperty/:id", async (req, res) => {
+      console.log("update property route hitted");
       const propertyId = req.params.id;
       const { property_title, property_location, property_image, price_range } =
         req.body;
@@ -185,42 +222,6 @@ async function run() {
       } catch (error) {
         console.error("Failed to update property:", error);
         res.status(500).json({ error: "Failed to update property" });
-      }
-    });
-
-    app.put("/update-offer-status/:estateId", async (req, res) => {
-      const estateId = req.params.estateId;
-      const { status, transactionId } = req.body;
-
-      try {
-        // Update the status of the offer
-        const result = await offerCollection.updateOne(
-          { estateId: new ObjectId(estateId), status: "accepted" }, // Find the accepted offer for the given estateId
-          { $set: { status, transactionId } }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Offer not found" });
-        }
-
-        // Update the property status to 'bought'
-        const propertyResult = await estateCollection.updateOne(
-          { _id: new ObjectId(estateId) },
-          { $set: { status: "bought" } }
-        );
-
-        if (propertyResult.matchedCount === 0) {
-          return res.status(404).json({ message: "Property not found" });
-        }
-
-        res
-          .status(200)
-          .json({ message: "Offer and property status updated successfully" });
-      } catch (error) {
-        console.error("Failed to update offer and property status:", error);
-        res
-          .status(500)
-          .json({ error: "Failed to update offer and property status" });
       }
     });
 
@@ -315,23 +316,42 @@ async function run() {
       }
     });
 
-    // Mark as fraud
+    // // Mark as fraud
     app.post("/users/:id/mark-fraud", async (req, res) => {
       try {
         const userId = req.params.id;
-        const result = await client
-          .db("estateDB")
-          .collection("users")
-          .updateOne(
-            { _id: new ObjectId(userId) },
-            { $set: { isFraud: true } }
-          );
-        res.send(result);
+    
+        // Retrieve user information using the provided user ID
+        const user = await userCollection.findOne({ _id: new ObjectId(userId) });
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+    
+        const userEmail = user.email;
+    
+        // Mark user as fraud
+        await userCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          { $set: { isFraud: true } }
+        );
+    
+        // Delete all properties added by the user
+        const deletePropertyResult = await estateCollection.deleteMany({ agent_email: userEmail });
+    
+        // Optionally, delete other associated data such as offers, reviews, etc.
+        await offerCollection.deleteMany({ buyer_email: userEmail });
+        await reviewsCollection.deleteMany({ userEmail: userEmail });
+    
+        res.status(200).json({
+          message: "User marked as fraud and associated data deleted successfully",
+          deletedPropertiesCount: deletePropertyResult.deletedCount
+        });
       } catch (error) {
-        res.status(500).send({ error: "Failed to mark user as fraud" });
+        console.error("Failed to mark user as fraud and delete data:", error);
+        res.status(500).json({ error: "Failed to mark user as fraud and delete data" });
       }
     });
-
+    
     // Delete user
     app.delete("/users/:id", async (req, res) => {
       try {
@@ -466,6 +486,16 @@ async function run() {
           userProfilePicture,
           reviewText,
         } = req.body;
+
+        // Check if the estateId exists and is valid
+        // You might want to perform additional validation here
+        if (!estateId) {
+          return res.status(400).send({ error: "Estate ID is required" });
+        }
+
+        // Here you can perform additional validation for the estateId,
+        // such as checking if the property exists in the database
+
         const newComment = {
           estateId,
           userName,
@@ -477,26 +507,61 @@ async function run() {
         const result = await reviewsCollection.insertOne(newComment);
         res.send(result);
       } catch (error) {
+        console.error("Error adding comment:", error);
         res.status(500).send({ error: "Failed to add comment" });
+      }
+    });
+
+    app.delete("/users/:email", async (req, res) => {
+      const userEmail = req.params.email;
+
+      try {
+        // Delete user
+        const userDeleteResult = await userCollection.deleteOne({
+          email: userEmail,
+        });
+
+        if (userDeleteResult.deletedCount === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        // Delete properties associated with the user's email
+        const propertyDeleteResult = await estateCollection.deleteMany({
+          agent_email: userEmail,
+        });
+
+        res
+          .status(200)
+          .json({
+            message: "User and associated properties deleted successfully",
+          });
+      } catch (error) {
+        console.error("Failed to delete user and properties:", error);
+        res.status(500).json({ error: "Failed to delete user and properties" });
       }
     });
 
     // app.get("/reviews", async (req, res) => {
     //   try {
+    //     console.log("Fetching reviews...");
     //     const { estateId } = req.query;
 
+    //     if (!estateId) {
+    //       return res.status(400).send({ error: "Estate ID is required" });
+    //     }
+
     //     const result = await reviewsCollection.find({ estateId }).toArray();
+    //     console.log("Reviews fetched:", result);
     //     res.send(result);
     //   } catch (error) {
-    //     res.status(500).send({ error: "Failed to retrieve comments" });
+    //     console.error("Failed to retrieve reviews:", error);
+    //     res.status(500).send({ error: "Failed to retrieve reviews" });
     //   }
     // });
 
-    app.get("/reviews", async (req, res) => {
+    app.get("/reviews/all", async (req, res) => {
       try {
-        console.log("Fetching reviews..."); // Add this line
         const result = await reviewsCollection.find().toArray();
-        console.log("Reviews fetched:", result); // Add this line
         res.send(result);
       } catch (error) {
         console.error("Failed to retrieve reviews:", error);
@@ -612,6 +677,29 @@ async function run() {
           .json({ error: "Failed to remove property from wishlist" });
       }
     });
+
+
+    app.get("/sold-properties/:agentName", async (req, res) => {
+      const agentName = req.params.agentName;
+      try {
+        const soldOffers = await offerCollection.find({
+          agent_name: agentName,
+          status: "bought" // assuming "bought" means the property is sold
+        }).toArray();
+    
+        if (soldOffers.length === 0) {
+          return res.status(404).json({ message: "No sold properties found for this agent" });
+        }
+    
+        res.status(200).json(soldOffers);
+      } catch (error) {
+        console.error("Failed to fetch sold properties:", error);
+        res.status(500).json({ error: "Failed to fetch sold properties" });
+      }
+    });
+
+
+
   } catch (error) {
     console.error(error);
   }
