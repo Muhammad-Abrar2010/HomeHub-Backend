@@ -11,7 +11,6 @@ const port = process.env.PORT || 5000;
 
 app.use(express.json());
 
-
 app.use(cors());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.u8mb1p2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -28,14 +27,11 @@ async function run() {
     // await client.connect();
     // await client.db("admin").command({ ping: 1 });
 
-
     const estateCollection = client.db("estateDB").collection("estate");
     const userCollection = client.db("estateDB").collection("users");
     const wishlistCollection = client.db("estateDB").collection("wishlist");
     const offerCollection = client.db("estateDB").collection("offers");
     const reviewsCollection = client.db("estateDB").collection("reviews");
-
-
 
     app.post("/jwt", async (req, res) => {
       const user = req.body;
@@ -57,7 +53,7 @@ async function run() {
           return res.status(401).send({ message: "forbidden access" });
         }
         req.decoded = decoded;
-     
+
         next();
       });
     };
@@ -293,7 +289,7 @@ async function run() {
       }
     });
 
-    app.post("/users",  async (req, res) => {
+    app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
       const existingUser = await userCollection.findOne(query);
